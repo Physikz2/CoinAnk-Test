@@ -5,11 +5,12 @@ const { DatabaseSync } = require('node:sqlite');
 const path = require('node:path');
 const { defaultDatabase, snapshotFor, openDatabase, insertSnapshots } = require('../helpers/coinank_sqlite.cjs');
 
-// Run `node tests\coinank_btc_eth_recorder.cjs` with Excel closed.
-// Capture immediately, then every 15 minutes; Ctrl+C stops the recorder.
+// Run `node tests\coinank_btc_eth_recorder.cjs` with Excel closed, or add --watch
+// for a read-only console table. Capture immediately, then every 15 minutes.
 const workbook = path.resolve(process.env.COINANK_WORKBOOK || path.join(__dirname, 'Book3.xlsx'));
 const database = path.resolve(process.env.COINANK_DB || defaultDatabase);
 const once = process.env.COINANK_ONCE === '1';
+const watch = process.argv.includes('--watch') || process.env.COINANK_WATCH === '1';
 const intervalMs = 15 * 60 * 1000;
 const WINDOW_SIZE = 24;
 const url = 'https://coinank.com/chart/derivatives/bubbles';
@@ -424,7 +425,9 @@ async function main() {
       viewport: { width: 1600, height: 1200 },
     });
     await trackBubbleLabels(page);
-    console.log(`Recording BTC and ETH to ${workbook}. Keep Excel closed; press Ctrl+C to stop.`);
+    console.log(watch
+      ? 'Watching BTC and ETH in read-only console mode; press Ctrl+C to stop.'
+      : `Recording BTC and ETH to ${workbook}. Keep Excel closed; press Ctrl+C to stop.`);
     let next = Date.now();
     let prevByCoin = getPresetState(database, coins);
     console.log(`Preloaded telemetry history (up to ${WINDOW_SIZE} bars): ` +
@@ -435,12 +438,20 @@ async function main() {
         if (!stopping) {
           const { meta, nextByCoin } = consoleTelemetry(values, prevByCoin);
           prevByCoin = nextByCoin;
-          await saveCapture(values, new Date().toISOString(), meta);
+          if (watch) {
+            console.table(readingsTable(values, meta));
+          } else {
+            await saveCapture(values, new Date().toISOString(), meta);
+          }
         }
       } catch (error) {
-        console.error(`Capture or workbook update failed: ${error.message}`);
+        console.error(watch
+          ? `Capture failed: ${error.message}`
+          : `Capture or workbook update failed: ${error.message}`);
         if (once) throw error;
-        if (page.isClosed()) throw new Error('The browser was closed; recording stopped.');
+        if (page.isClosed()) {
+          throw new Error(`The browser was closed; ${watch ? 'watching' : 'recording'} stopped.`);
+        }
       }
       if (once || stopping) break;
       next = nextCaptureAfter(next, Date.now());
